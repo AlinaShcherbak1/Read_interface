@@ -11,9 +11,11 @@
 #include <stdlib.h>
 #include <stdbool.h>
 
+#include "protocols.h"
+
 #define DEBUG_MODE
 
-void mem_dump(void *ptr, size_t mem_size, FILE *file_ptr)
+void mem_dump(void *ptr, size_t mem_size)
 {
     if (!ptr)
         return;
@@ -22,12 +24,12 @@ void mem_dump(void *ptr, size_t mem_size, FILE *file_ptr)
     {
         for (int i = 0; i < mem_size; i++)
         {
-            fprintf(file_ptr, "%02X ", arr[i]);
+            printf("%02X ", arr[i]);
             if ((i + 1) % 16 == 0)
-                fprintf(file_ptr, "\n");
+                printf("\n");
         }
     }
-    fprintf(file_ptr, "\n");
+    printf("\n");
 }
 
 int tap_close(int file_descr)
@@ -56,17 +58,39 @@ int tap_open(char *iface_name)
     return file_descr;
 }
 
-int read_packet(int file_descr, uint8_t *tx_buf, FILE *file_ptr)
+void print_ifaces_ip(uint16_t eth_type, struct ip_adr *ip_sender, struct ip_adr *ip_target, ssize_t bytes, int i, uint8_t *tx_buf)
+{
+    switch (eth_type)
+    {
+    case ETH_ARP_PROT:
+    {
+        printf("\n\nGot an ARP packet\n");
+        break;
+    }
+    case ETH_IPV4_PROT:
+    {
+        printf("\n\nGot an IP packet\n");
+        break;
+    }
+    default:
+        exit;
+    }
+    print_ip(ip_sender, "Sender");
+    print_ip(ip_target, "Target");
+    printf("\npacket = %d\nGot frame: %d bytes \n", i, bytes);
+    mem_dump(tx_buf, (ssize_t)bytes);
+}
+
+int read_packet(int file_descr, uint8_t *tx_buf)
 {
 
-    if (file_descr < 0 || !tx_buf || !file_ptr)
+    if (file_descr < 0 || !tx_buf)
     {
         perror("read_packet");
         return -1;
     }
-    bool check = false;
 
-    for (int i = 0; i < 10; i++)
+    for (int i = 0; i < 20; i++)
     {
         ssize_t bytes = read(file_descr, tx_buf, 100);
         if (bytes <= 0)
@@ -74,35 +98,37 @@ int read_packet(int file_descr, uint8_t *tx_buf, FILE *file_ptr)
             perror("read");
             continue;
         }
-        printf("\ni = %d\nGot frame: %d bytes \n", i, bytes);
-        fprintf(file_ptr, "\ni = %d\nGot frame: %d bytes \n", i, bytes);
-        mem_dump(tx_buf, (ssize_t)bytes, file_ptr);
-        if (bytes == 42)
-            return 0;
+        uint16_t Ethernet_type = (tx_buf[12] << 8 | tx_buf[13]);
+
+        switch (Ethernet_type)
+        {
+        case ETH_ARP_PROT:
+        {
+            struct ip_adr ip_sender, ip_target;
+            ip_sender.data.val32 = SWAP_DWORD((uint32_t)tx_buf[28] << 24 | (uint32_t)tx_buf[29] << 16 | (uint32_t)tx_buf[30] << 8 | (uint32_t)tx_buf[31]);
+            ip_target.data.val32 = SWAP_DWORD((uint32_t)tx_buf[38] << 24 | (uint32_t)tx_buf[39] << 16 | (uint32_t)tx_buf[40] << 8 | (uint32_t)tx_buf[41]);
+            print_ifaces_ip(Ethernet_type, &ip_sender, &ip_target, bytes, i, tx_buf);
+            break;
+        }
+        case ETH_IPV4_PROT:
+        {
+            struct ip_adr ip_sender, ip_target;
+            ip_sender.data.val32 = SWAP_DWORD((uint32_t)tx_buf[26] << 24 | (uint32_t)tx_buf[27] << 16 | (uint32_t)tx_buf[28] << 8 | (uint32_t)tx_buf[29]);
+            ip_target.data.val32 = SWAP_DWORD((uint32_t)tx_buf[30] << 24 | (uint32_t)tx_buf[31] << 16 | (uint32_t)tx_buf[32] << 8 | (uint32_t)tx_buf[33]);
+            print_ifaces_ip(Ethernet_type, &ip_sender, &ip_target, bytes, i, tx_buf);
+            break;
+        }
+        default:
+            break;
+        }
     }
 
     return 0;
 }
 
-void read_file(FILE *file_ptr)
-{
-    file_ptr = fopen("/home/alina/Documents/data.txt", "r");
-    char arr[100];
-    while (fgets(arr, 100, file_ptr))
-    {
-        printf("%s", arr);
-    }
-}
-
 int main()
 {
     uint8_t txbuf[1000] = {0};
-    FILE *file_ptr = fopen("/home/alina/Documents/data.txt", "w");
-    if (!file_ptr)
-    {
-        perror("file_ptr");
-        exit;
-    }
 
 #ifndef DEBUG_MODE
     char iface_name[20];
@@ -118,9 +144,6 @@ int main()
         perror("file_descr failed");
         return 1;
     }
-    read_packet(file_descr, txbuf, file_ptr);
+    read_packet(file_descr, txbuf);
     tap_close(file_descr);
-    fclose(file_ptr);
-
-    read_file(file_ptr);
 }
